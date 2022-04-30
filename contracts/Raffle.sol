@@ -3,12 +3,14 @@
 pragma solidity ^0.8.7;
 
 import "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
+import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
 
 error Raffe__SendMoreToEnterRaffle();
 error Raffle__RaffleNotOpen();
 error Raffle__UpkeepNotNeeded();
+error Raffle__TransferFailed();
 
-contract Raffle {
+contract Raffle is VRFConsumerBaseV2 {
     enum RaffleState {
         Open,
         Calculating
@@ -26,11 +28,14 @@ contract Raffle {
     bytes32 public i_gasLane;
     uint64 public i_subscriptionId;
     uint32 public i_callbackGasLimit;
+    address public s_recentWinner;
 
     uint16 public constant REQUEST_CONFIRMATIONS = 3;
     uint32 public constant NUM_WORDS = 1;
 
     event RaffleEnter(address indexed player);
+    event RequestedRaffleWinner(uint256 indexed requestId);
+    event WinnerPicked(address indexed winner);
 
     constructor(
         uint256 entranceFee, 
@@ -40,7 +45,7 @@ contract Raffle {
         uint64 subscriptionId,
         uint32 callbackGasLimit
 
-    ) {
+    ) VRFConsumerBaseV2(vrfCoordinatorV2) {
         i_entranceFee = entranceFee;
         i_interval = interval;
         s_lastTimeStamp = block.timestamp;
@@ -104,5 +109,23 @@ contract Raffle {
             i_callbackGasLimit,
             NUM_WORDS
         );
+        emit RequestedRaffleWinner(requestId);
+    }
+
+    function fulfillRandomWords(
+        uint256 /*requestId */,
+        uint256[] memory randomWords
+    ) internal override {
+        uint256 indexOfWinner = randomWords[0] % s_players.length;
+        address payable recentWinner = s_players[indexOfWinner];
+        s_recentWinner = recentWinner;
+        s_players = new address payable[](0); // reset players array
+        s_raffleState = RaffleState.Open; // reset raffle state
+        s_lastTimeStamp = block.timestamp; // reset time stamp
+        (bool success, ) = recentWinner.call{value: address(this).balance}("");
+        if (!success) {
+            revert Raffle__TransferFailed();
+        }
+        emit WinnerPicked(recentWinner);
     }
 }
